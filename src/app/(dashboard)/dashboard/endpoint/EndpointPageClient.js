@@ -1629,6 +1629,7 @@ export default function APIPageClient({ machineId }) {
         activeProviders={activeProvidersList}
         title="Select Allowed Models for Key"
         closeOnSelect={false}
+        allowProviderWildcard={true}
         addedModelValues={newKeyAllowedModels}
         onSelect={(model) => {
           const val = model?.value || model?.name || model;
@@ -1649,6 +1650,7 @@ export default function APIPageClient({ machineId }) {
         activeProviders={activeProvidersList}
         title="Select Allowed Models for Key"
         closeOnSelect={false}
+        allowProviderWildcard={true}
         addedModelValues={editKeyAllowedModels}
         onSelect={(model) => {
           const val = model?.value || model?.name || model;
