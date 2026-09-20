@@ -81,6 +81,7 @@ export default function ModelSelectModal({
   capFilter = null,
   addedModelValues = [],
   closeOnSelect = true,
+  allowProviderWildcard = false,
 }) {
   // Filter activeProviders by serviceKinds when kindFilter set (e.g. "webSearch", "webFetch")
   const filteredActiveProviders = useMemo(() => {
@@ -451,12 +452,17 @@ export default function ModelSelectModal({
       }
       if (query) {
         const providerNameMatches = group.name.toLowerCase().includes(query);
+        const aliasMatches = allowProviderWildcard && (
+          (group.alias && group.alias.toLowerCase().includes(query)) ||
+          (providerId && providerId.toLowerCase().includes(query)) ||
+          `${group.alias}/*`.toLowerCase().includes(query)
+        );
         models = models.filter(
           (m) =>
             m.name.toLowerCase().includes(query) ||
             m.id.toLowerCase().includes(query)
         );
-        if (models.length === 0 && !providerNameMatches) return;
+        if (models.length === 0 && !providerNameMatches && !aliasMatches) return;
       }
       filtered[providerId] = {
         ...group,
@@ -465,7 +471,7 @@ export default function ModelSelectModal({
     });
 
     return filtered;
-  }, [groupedModels, searchQuery, addedModelValues]);
+  }, [groupedModels, searchQuery, addedModelValues, allowProviderWildcard]);
 
   const handleSelect = (model) => {
     const value = model?.value || model?.name || model;
@@ -498,7 +504,11 @@ export default function ModelSelectModal({
       {/* Info bar */}
       <div className="flex items-center gap-2 mb-3 px-2.5 py-2 bg-primary/8 border border-primary/20 rounded-lg text-xs text-text-muted">
         <span className="material-symbols-outlined text-primary shrink-0" style={{ fontSize: "14px" }}>info</span>
-        <span>Click to add, click again to remove. Changes are saved automatically.</span>
+        <span>
+          {allowProviderWildcard
+            ? "Click to add/remove a model, or click a provider name to toggle wildcard (e.g. provider/*)."
+            : "Click to add, click again to remove. Changes are saved automatically."}
+        </span>
       </div>
 
       {/* Search - compact */}
@@ -556,24 +566,49 @@ export default function ModelSelectModal({
         )}
 
         {/* Provider models */}
-        {Object.entries(filteredGroups).map(([providerId, group]) => (
-          <div key={providerId}>
-            {/* Provider header */}
-            <div className="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5">
-              <ProviderIcon
-                src={`/providers/${providerId}.png`}
-                alt={group.name}
-                size={14}
-                fallbackText={(group.name || providerId).slice(0, 2).toUpperCase()}
-                fallbackColor={group.color}
-              />
-              <span className="text-xs font-medium text-primary">
-                {group.name}
-              </span>
-              <span className="text-[10px] text-text-muted">
-                ({group.models.length})
-              </span>
-            </div>
+        {Object.entries(filteredGroups).map(([providerId, group]) => {
+          const wildcardValue = `${group.alias || providerId}/*`;
+          const isWildcardAdded = allowProviderWildcard && addedModelValues.includes(wildcardValue);
+
+          return (
+            <div key={providerId}>
+              {/* Provider header */}
+              <div className="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5 z-10">
+                <ProviderIcon
+                  src={`/providers/${providerId}.png`}
+                  alt={group.name}
+                  size={14}
+                  fallbackText={(group.name || providerId).slice(0, 2).toUpperCase()}
+                  fallbackColor={group.color}
+                />
+                {allowProviderWildcard ? (
+                  <button
+                    type="button"
+                    onClick={() => handleSelect({ value: wildcardValue, name: wildcardValue })}
+                    title={isWildcardAdded ? `Click to remove wildcard ${wildcardValue}` : `Click to allow all models from ${group.name} (${wildcardValue})`}
+                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium transition-all cursor-pointer border ${
+                      isWildcardAdded
+                        ? "bg-primary text-white border-primary shadow-2xs hover:bg-primary-hover"
+                        : "text-primary border-transparent hover:bg-primary/10 hover:border-primary/20"
+                    }`}
+                  >
+                    {isWildcardAdded && (
+                      <span className="material-symbols-outlined leading-none text-[12px]">check</span>
+                    )}
+                    <span>{group.name}</span>
+                    <span className={`text-[10px] font-mono px-1 py-0.2 rounded ${isWildcardAdded ? "bg-white/20 text-white" : "text-text-muted bg-sidebar border border-border/50"}`}>
+                      {wildcardValue}
+                    </span>
+                  </button>
+                ) : (
+                  <span className="text-xs font-medium text-primary">
+                    {group.name}
+                  </span>
+                )}
+                <span className="text-[10px] text-text-muted">
+                  ({group.models.length})
+                </span>
+              </div>
 
             <div className="flex flex-wrap gap-1.5">
               {group.models.map((model) => {
@@ -623,16 +658,17 @@ export default function ModelSelectModal({
               })}
             </div>
           </div>
-        ))}
+        );
+      })}
 
-        {Object.keys(filteredGroups).length === 0 && filteredCombos.length === 0 && (
-          <div className="text-center py-4 text-text-muted">
-            <span className="material-symbols-outlined text-2xl mb-1 block">
-              search_off
-            </span>
-            <p className="text-xs">No models found</p>
-          </div>
-        )}
+      {Object.keys(filteredGroups).length === 0 && filteredCombos.length === 0 && (
+        <div className="text-center py-4 text-text-muted">
+          <span className="material-symbols-outlined text-2xl mb-1 block">
+            search_off
+          </span>
+          <p className="text-xs">No models found</p>
+        </div>
+      )}
       </div>
     </Modal>
   );
@@ -654,4 +690,5 @@ ModelSelectModal.propTypes = {
   kindFilter: PropTypes.string,
   addedModelValues: PropTypes.arrayOf(PropTypes.string),
   closeOnSelect: PropTypes.bool,
+  allowProviderWildcard: PropTypes.bool,
 };

@@ -398,6 +398,7 @@ export function isModelAllowedForKey(requestedModel, allowedModels) {
       const pfx = pattern.slice(0, -2);
       if (prefix && prefix === pfx) return true;
       if (modelLower.startsWith(`${pfx}/`)) return true;
+      if (prefix && resolveProviderId(prefix) === resolveProviderId(pfx)) return true;
     }
     // Wildcard pattern like "*gpt-4*"
     if (pattern.includes("*")) {

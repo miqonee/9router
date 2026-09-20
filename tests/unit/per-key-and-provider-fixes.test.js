@@ -31,6 +31,10 @@ describe("Per-Key Model Access and Token Limit Rules", () => {
       expect(isModelAllowedForKey("oc/any-other-model", allowed)).toBe(true);
       expect(isModelAllowedForKey("deepseek/deepseek-chat", allowed)).toBe(true);
       expect(isModelAllowedForKey("openai/gpt-4o", allowed)).toBe(false);
+
+      // Provider ID and alias cross-matching
+      const allowedWithId = ["opencode/*"];
+      expect(isModelAllowedForKey("oc/muse-spark-1.2-contributor-free", allowedWithId)).toBe(true);
     });
 
     it("matches wildcard pattern (e.g. *claude*, *flash*)", () => {
