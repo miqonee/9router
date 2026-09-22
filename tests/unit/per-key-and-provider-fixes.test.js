@@ -184,4 +184,46 @@ describe("Provider Model List Fixes", () => {
     expect(activeOnly.map((c) => c.name)).toEqual(["literouter"]);
     expect(activeOnly.some((c) => c.name === "NavyAI")).toBe(false);
   });
+
+  describe("OAuth Provider Models Endpoint", () => {
+    it("returns static models for Claude OAuth connection without apiKey", async () => {
+      const { GET } = await import("@/app/api/providers/[id]/models/route.js");
+      const modelsModule = await import("@/models");
+
+      vi.spyOn(modelsModule, "getProviderConnectionById").mockResolvedValue({
+        id: "claude-oauth-1",
+        provider: "claude",
+        authType: "oauth",
+        accessToken: "sk-ant-oauth-test",
+        apiKey: null,
+      });
+
+      const res = await GET(new Request("http://localhost:20128/api/providers/claude-oauth-1/models"), {
+        params: Promise.resolve({ id: "claude-oauth-1" }),
+      });
+
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.provider).toBe("claude");
+      expect(json.models.length).toBeGreaterThan(0);
+      expect(json.models.some((m) => m.id.includes("claude-sonnet") || m.id.includes("claude-opus"))).toBe(true);
+    });
+
+    it("cleans provider prefix for Qoder models during import parsing", () => {
+      const qoderRaw = [
+        { id: "qoder/auto", name: "Auto" },
+        { id: "qoder-cn/qwen-2.5-coder", name: "Qwen 2.5 Coder" },
+        { id: "claude-3-5-sonnet", name: "Claude 3.5 Sonnet" },
+      ];
+
+      const cleaned = qoderRaw.map((m) => ({
+        ...m,
+        id: m.id.replace(/^(qoder-cn|qoder)\//, ""),
+      }));
+
+      expect(cleaned[0].id).toBe("auto");
+      expect(cleaned[1].id).toBe("qwen-2.5-coder");
+      expect(cleaned[2].id).toBe("claude-3-5-sonnet");
+    });
+  });
 });
