@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -88,6 +88,7 @@ export default function ProviderDetailPage() {
   const [importingClineModels, setImportingClineModels] = useState(false);
   const [showImportModelsModal, setShowImportModelsModal] = useState(false);
   const [importModalModels, setImportModalModels] = useState([]);
+  const [importInitialSelectedIds, setImportInitialSelectedIds] = useState(new Set());
   const [fetchingImportModels, setFetchingImportModels] = useState(false);
   const [savingImportModels, setSavingImportModels] = useState(false);
   const { copied, copy } = useCopyToClipboard();
@@ -638,6 +639,26 @@ export default function ProviderDetailPage() {
         return true;
       });
 
+      const currentlySelected = new Set();
+      for (const m of models) {
+        if (!disabledModelIds.includes(m.id)) {
+          currentlySelected.add(m.id);
+        }
+      }
+      for (const m of customModels) {
+        if (m.providerAlias === providerStorageAlias && (m.kind || m.type || "llm") === "llm") {
+          currentlySelected.add(m.id);
+        }
+      }
+      for (const fullModel of Object.values(modelAliases)) {
+        if (fullModel.startsWith(`${providerStorageAlias}/`)) {
+          currentlySelected.add(fullModel.slice(providerStorageAlias.length + 1));
+        } else if (fullModel.startsWith(`${providerId}/`)) {
+          currentlySelected.add(fullModel.slice(providerId.length + 1));
+        }
+      }
+
+      setImportInitialSelectedIds(currentlySelected);
       setImportModalModels(deduped);
       setShowImportModelsModal(true);
     } catch (error) {
@@ -677,28 +698,6 @@ export default function ProviderDetailPage() {
       setSavingImportModels(false);
     }
   };
-
-  const currentlySelectedModelIds = useMemo(() => {
-    const set = new Set();
-    for (const m of models) {
-      if (!disabledModelIds.includes(m.id)) {
-        set.add(m.id);
-      }
-    }
-    for (const m of customModels) {
-      if (m.providerAlias === providerStorageAlias && (m.kind || m.type || "llm") === "llm") {
-        set.add(m.id);
-      }
-    }
-    for (const fullModel of Object.values(modelAliases)) {
-      if (fullModel.startsWith(`${providerStorageAlias}/`)) {
-        set.add(fullModel.slice(providerStorageAlias.length + 1));
-      } else if (fullModel.startsWith(`${providerId}/`)) {
-        set.add(fullModel.slice(providerId.length + 1));
-      }
-    }
-    return set;
-  }, [models, disabledModelIds, customModels, modelAliases, providerStorageAlias, providerId]);
 
   const handleRunOneByOneTest = async () => {
     if (oneByOneRunning || connections.length === 0) return;
@@ -1937,7 +1936,7 @@ export default function ProviderDetailPage() {
         onClose={() => !savingImportModels && setShowImportModelsModal(false)}
         title={`Select Models from ${providerInfo?.name || providerId} (${importModalModels.length} available)`}
         availableModels={importModalModels}
-        initialSelectedIds={currentlySelectedModelIds}
+        initialSelectedIds={importInitialSelectedIds}
         onSave={handleSaveImportedModels}
         saving={savingImportModels}
       />
