@@ -226,4 +226,53 @@ describe("Provider Model List Fixes", () => {
       expect(cleaned[2].id).toBe("claude-3-5-sonnet");
     });
   });
+
+  describe("API Key Usage Stats Uniqueness (#3640, #2918)", () => {
+    it("ensures two distinct keys with the same machineId prefix do not share mask or collide", async () => {
+      const key1 = "sk-00275ae3b782c137-key001-a1b2c3d4";
+      const key2 = "sk-00275ae3b782c137-key002-e5f60718";
+
+      const usageRepo = await import("@/lib/db/repos/usageRepo.js");
+      expect(key1.slice(0, 8)).toBe(key2.slice(0, 8));
+
+      const fakeDb = {
+        all: vi.fn().mockImplementation((query) => {
+          if (query.includes("usageHistory WHERE timestamp >=")) {
+            return [
+              {
+                timestamp: new Date().toISOString(),
+                provider: "openai",
+                model: "gpt-4o",
+                apiKey: key1,
+                promptTokens: 100,
+                completionTokens: 50,
+                cost: 0.001,
+                tokens: JSON.stringify({ input_tokens: 100, output_tokens: 50 }),
+              },
+              {
+                timestamp: new Date().toISOString(),
+                provider: "openai",
+                model: "gpt-4o",
+                apiKey: key2,
+                promptTokens: 200,
+                completionTokens: 80,
+                cost: 0.002,
+                tokens: JSON.stringify({ prompt_tokens: 200, completion_tokens: 80 }),
+              },
+            ];
+          }
+          if (query.includes("usageDaily")) return [];
+          return [];
+        }),
+      };
+
+      vi.spyOn(await import("@/lib/db/driver.js"), "getAdapter").mockResolvedValue(fakeDb);
+
+      const stats = await usageRepo.getUsageStats("today");
+      const byApiKeyEntries = Object.values(stats.byApiKey || {});
+      expect(byApiKeyEntries.length).toBe(2);
+      expect(byApiKeyEntries.some((e) => e.promptTokens === 100)).toBe(true);
+      expect(byApiKeyEntries.some((e) => e.promptTokens === 200)).toBe(true);
+    });
+  });
 });
