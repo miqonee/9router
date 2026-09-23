@@ -343,13 +343,13 @@ export function extractApiKey(request) {
   // Check Authorization header first
   const authHeader = request.headers.get("Authorization");
   if (authHeader?.startsWith("Bearer ")) {
-    return authHeader.slice(7);
+    return authHeader.slice(7).trim();
   }
 
   // Check Anthropic x-api-key header
   const xApiKey = request.headers.get("x-api-key");
   if (xApiKey) {
-    return xApiKey;
+    return xApiKey.trim();
   }
 
   return null;

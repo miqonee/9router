@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getProviderConnectionById } from "@/models";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { GEMINI_CONFIG, ZED_HOSTED_CONFIG } from "@/lib/oauth/constants/oauth";
-import { refreshGoogleToken, refreshCodexToken, updateProviderCredentials } from "@/sse/services/tokenRefresh";
+import { refreshGoogleToken, refreshCodexToken, updateProviderCredentials, checkAndRefreshToken } from "@/sse/services/tokenRefresh";
 import { resolveOllamaLocalHost } from "open-sse/config/providers.js";
 import { getModelsByProviderId } from "open-sse/config/providerModels.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
@@ -126,6 +126,49 @@ const buildOAuthResolver = ({ refreshFn, fetchFn, parseFn, errorLabel }) => asyn
   }
   return { models: [], warning };
 };
+
+// Qoder shares one resolver across intl (qoder) and CN (qoder-cn); the
+// credentials carry the connection's provider so qoderModels picks the right
+// region's catalog endpoint, and the ids keep the provider prefix.
+function buildQoderModelsResolver(providerId) {
+  return {
+    customResolver: async (connection) => {
+      const credentials = {
+        provider: providerId,
+        accessToken: connection.accessToken,
+        apiKey: connection.apiKey,
+        refreshToken: connection.refreshToken,
+        email: connection.email,
+        displayName: connection.displayName,
+        providerSpecificData: connection.providerSpecificData || {},
+      };
+      let warning;
+      try {
+        const result = await resolveQoderModels(credentials, { forceRefresh: true });
+        if (result?.models?.length) {
+          return {
+            models: result.models.map((m) => ({
+              // Use the canonical "<providerId>/<key>" id so the dashboard
+              // surfaces the same identifier the chat router expects.
+              id: `${providerId}/${m.id}`,
+              name: m.name,
+              contextLength: m.contextLength,
+              isVL: m.isVL,
+              isReasoning: m.isReasoning,
+              maxOutputTokens: m.maxOutputTokens,
+              description: m.description,
+            })),
+          };
+        }
+        warning = "Qoder returned no models; falling back to static catalog.";
+      } catch (error) {
+        warning = `Failed to fetch Qoder models: ${error.message}`;
+        console.log("Failed to fetch Qoder models dynamically, falling back to static:", error.message);
+      }
+      return { models: [], warning };
+    },
+  };
+}
 
 // Provider models endpoints configuration
 const PROVIDER_MODELS_CONFIG = {
@@ -403,42 +446,8 @@ const PROVIDER_MODELS_CONFIG = {
       return { models: [], warning };
     }
   },
-  qoder: {
-    customResolver: async (connection) => {
-      const credentials = {
-        accessToken: connection.accessToken,
-        apiKey: connection.apiKey,
-        refreshToken: connection.refreshToken,
-        email: connection.email,
-        displayName: connection.displayName,
-        providerSpecificData: connection.providerSpecificData || {},
-      };
-      let warning;
-      try {
-        const result = await resolveQoderModels(credentials, { forceRefresh: true });
-        if (result?.models?.length) {
-          return {
-            models: result.models.map((m) => ({
-              // Use the canonical "qoder/<key>" id so the dashboard
-              // surfaces the same identifier the chat router expects.
-              id: `qoder/${m.id}`,
-              name: m.name,
-              contextLength: m.contextLength,
-              isVL: m.isVL,
-              isReasoning: m.isReasoning,
-              maxOutputTokens: m.maxOutputTokens,
-              description: m.description,
-            })),
-          };
-        }
-        warning = "Qoder returned no models; falling back to static catalog.";
-      } catch (error) {
-        warning = `Failed to fetch Qoder models: ${error.message}`;
-        console.log("Failed to fetch Qoder models dynamically, falling back to static:", error.message);
-      }
-      return { models: [], warning };
-    },
-  },
+  qoder: buildQoderModelsResolver("qoder"),
+  "qoder-cn": buildQoderModelsResolver("qoder-cn"),
   "gemini-cli": {
     customResolver: buildOAuthResolver({
       refreshFn: (conn) => refreshGoogleToken(conn.refreshToken, GEMINI_CONFIG.clientId, GEMINI_CONFIG.clientSecret),
@@ -519,8 +528,19 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
-    if (isOpenAICompatibleProvider(connection.provider)) {
-      const baseUrl = connection.providerSpecificData?.baseUrl;
+    // Pre-fetch proactive token refresh for OAuth or refreshable credentials
+    let activeConnection = connection;
+    try {
+      const refreshed = await checkAndRefreshToken(connection.provider, connection);
+      if (refreshed && (refreshed.accessToken || refreshed.copilotToken || refreshed.apiKey)) {
+        activeConnection = { ...connection, ...refreshed };
+      }
+    } catch (err) {
+      console.log(`[models] Proactive token refresh check for ${connection.provider}:`, err?.message || err);
+    }
+
+    if (isOpenAICompatibleProvider(activeConnection.provider)) {
+      const baseUrl = activeConnection.providerSpecificData?.baseUrl;
       if (!baseUrl) {
         return NextResponse.json({ error: "No base URL configured for OpenAI compatible provider" }, { status: 400 });
       }
@@ -529,13 +549,13 @@ export async function GET(request, { params }) {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${connection.apiKey}`,
+          "Authorization": `Bearer ${activeConnection.apiKey}`,
         },
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.log(`Error fetching models from ${connection.provider}:`, errorText);
+        console.log(`Error fetching models from ${activeConnection.provider}:`, errorText);
         return NextResponse.json(
           { error: `Failed to fetch models: ${response.status}` },
           { status: response.status }
@@ -546,14 +566,14 @@ export async function GET(request, { params }) {
       const models = data.data || data.models || [];
 
       return NextResponse.json({
-        provider: connection.provider,
-        connectionId: connection.id,
+        provider: activeConnection.provider,
+        connectionId: activeConnection.id,
         models
       });
     }
 
-    if (isAnthropicCompatibleProvider(connection.provider)) {
-      let baseUrl = connection.providerSpecificData?.baseUrl;
+    if (isAnthropicCompatibleProvider(activeConnection.provider)) {
+      let baseUrl = activeConnection.providerSpecificData?.baseUrl;
       if (!baseUrl) {
         return NextResponse.json({ error: "No base URL configured for Anthropic compatible provider" }, { status: 400 });
       }
@@ -568,15 +588,15 @@ export async function GET(request, { params }) {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": connection.apiKey,
+          "x-api-key": activeConnection.apiKey,
           "anthropic-version": "2023-06-01",
-          "Authorization": `Bearer ${connection.apiKey}`
+          "Authorization": `Bearer ${activeConnection.apiKey}`
         },
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.log(`Error fetching models from ${connection.provider}:`, errorText);
+        console.log(`Error fetching models from ${activeConnection.provider}:`, errorText);
         return NextResponse.json(
           { error: `Failed to fetch models: ${response.status}` },
           { status: response.status }
@@ -587,50 +607,61 @@ export async function GET(request, { params }) {
       const models = data.data || data.models || [];
 
       return NextResponse.json({
-        provider: connection.provider,
-        connectionId: connection.id,
+        provider: activeConnection.provider,
+        connectionId: activeConnection.id,
         models
       });
     }
 
-    const config = PROVIDER_MODELS_CONFIG[connection.provider];
+    // Claude OAuth uses OAuth tokens rather than x-api-key; api.anthropic.com/v1/models rejects OAuth
+    if (activeConnection.provider === "claude" && !activeConnection.apiKey && activeConnection.accessToken) {
+      return NextResponse.json({
+        provider: activeConnection.provider,
+        connectionId: activeConnection.id,
+        models: getStaticProviderModels("claude")
+      });
+    }
+
+    const config = PROVIDER_MODELS_CONFIG[activeConnection.provider];
     if (!config) {
       return NextResponse.json(
-        { error: `Provider ${connection.provider} does not support models listing` },
+        { error: `Provider ${activeConnection.provider} does not support models listing` },
         { status: 400 }
       );
     }
 
     // Config-driven custom resolver path (OAuth refresh, non-OpenAI shape, etc.)
     if (typeof config.customResolver === "function") {
-      const result = await config.customResolver(connection);
+      const result = await config.customResolver(activeConnection);
       if (result.error) {
         return NextResponse.json({ error: result.error }, { status: result.status || 500 });
       }
       return NextResponse.json({
-        provider: connection.provider,
-        connectionId: connection.id,
+        provider: activeConnection.provider,
+        connectionId: activeConnection.id,
         models: result.models,
         ...(result.warning ? { warning: result.warning } : {})
       });
     }
 
     // Get auth token
-    const token = connection.providerSpecificData?.copilotToken || connection.accessToken || connection.apiKey;
+    const token = activeConnection.providerSpecificData?.copilotToken || activeConnection.accessToken || activeConnection.apiKey;
     if (!token) {
       return NextResponse.json({ error: "No valid token found" }, { status: 401 });
     }
 
-    // Build request URL
+    // Build request URL & headers
     let url = config.url;
-    if (config.authQuery) {
+    const isApiKey = Boolean(activeConnection.apiKey);
+    if (config.authQuery && isApiKey) {
       url += `?${config.authQuery}=${token}`;
     }
 
-    // Build headers
     const headers = { ...config.headers };
-    if (config.authHeader && !config.authQuery) {
+    if (config.authHeader && (!config.authQuery || !isApiKey)) {
       headers[config.authHeader] = (config.authPrefix || "") + token;
+    } else if (config.authQuery && !isApiKey) {
+      headers["Authorization"] = `Bearer ${token}`;
     }
 
     // Make request
@@ -647,7 +678,7 @@ export async function GET(request, { params }) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.log(`Error fetching models from ${connection.provider}:`, errorText);
+      console.log(`Error fetching models from ${activeConnection.provider}:`, errorText);
       return NextResponse.json(
         { error: `Failed to fetch models: ${response.status}` },
         { status: response.status }
@@ -658,8 +689,8 @@ export async function GET(request, { params }) {
     const models = config.parseResponse(data);
 
     return NextResponse.json({
-      provider: connection.provider,
-      connectionId: connection.id,
+      provider: activeConnection.provider,
+      connectionId: activeConnection.id,
       models
     });
   } catch (error) {

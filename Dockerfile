@@ -1,13 +1,24 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_IMAGE=node:22-alpine
+ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG APP_VERSION=unknown
+
 FROM ${NODE_IMAGE} AS base
+ARG ALPINE_MIRROR
 WORKDIR /app
-# Allow HTTP for apk repositories so corporate MITM/TLS inspection doesn't fail apk package downloads (Alpine packages are cryptographically signed with RSA keys)
-RUN sed -i 's|https://|http://|g' /etc/apk/repositories && apk --no-cache add ca-certificates
+# Use the official Alpine mirror by default. A repository variable/build arg can
+# override it for environments that require a regional mirror.
+# Allow HTTP for apk repositories so corporate MITM/TLS inspection doesn't fail apk package downloads
+RUN if [ "$ALPINE_MIRROR" != "dl-cdn.alpinelinux.org" ]; then \
+      sed -i "s|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g" /etc/apk/repositories; \
+    fi && \
+    sed -i 's|https://|http://|g' /etc/apk/repositories && apk --no-cache add ca-certificates
 
 FROM base AS builder
+ARG NPM_REGISTRY
 
-RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
+RUN apk add --no-cache python3 make g++ linux-headers
 
 # If custom CA certificates are provided (e.g. corporate proxy), install them
 COPY ca-bundle.crt* /usr/local/share/ca-certificates/
@@ -15,16 +26,32 @@ RUN if [ -f /usr/local/share/ca-certificates/ca-bundle.crt ]; then update-ca-cer
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 COPY package.json ./
-RUN npm config set strict-ssl false && npm install
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set strict-ssl false && \
+    npm install \
+      --registry="${NPM_REGISTRY}" \
+      --fetch-retries=5 \
+      --fetch-retry-factor=2 \
+      --fetch-retry-mintimeout=10000 \
+      --fetch-retry-maxtimeout=120000 \
+      --fetch-timeout=300000
 
 COPY . ./
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM base AS runner
+FROM ${NODE_IMAGE} AS runner
+ARG ALPINE_MIRROR
+ARG APP_VERSION
 WORKDIR /app
 
-LABEL org.opencontainers.image.title="9router"
+RUN if [ "$ALPINE_MIRROR" != "dl-cdn.alpinelinux.org" ]; then \
+      sed -i "s|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g" /etc/apk/repositories; \
+    fi && \
+    sed -i 's|https://|http://|g' /etc/apk/repositories && apk --no-cache add ca-certificates
+
+LABEL org.opencontainers.image.title="9router" \
+      org.opencontainers.image.version="${APP_VERSION}"
 
 ENV NODE_ENV=production
 ENV PORT=20128
@@ -58,8 +85,9 @@ RUN mkdir -p /app/data && chown -R node:node /app && \
   mkdir -p /app/data-home && chown node:node /app/data-home && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true
 
-# Fix permissions at runtime (handles mounted volumes)
-RUN apk --no-cache upgrade && apk --no-cache add su-exec && \
+# Avoid a full distribution upgrade in the runtime image. It makes builds less
+# reproducible and is unrelated to installing the runtime entrypoint helper.
+RUN apk add --no-cache su-exec && \
   printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
