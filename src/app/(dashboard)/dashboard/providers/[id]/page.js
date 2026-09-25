@@ -640,21 +640,28 @@ export default function ProviderDetailPage() {
       });
 
       const currentlySelected = new Set();
-      for (const m of models) {
-        if (!disabledModelIds.includes(m.id)) {
-          currentlySelected.add(m.id);
+      const explicitEnabled = activeConnection?.providerSpecificData?.enabledModels;
+      if (Array.isArray(explicitEnabled) && explicitEnabled.length > 0) {
+        for (const id of explicitEnabled) {
+          currentlySelected.add(id);
         }
-      }
-      for (const m of customModels) {
-        if (m.providerAlias === providerStorageAlias && (m.kind || m.type || "llm") === "llm") {
-          currentlySelected.add(m.id);
+      } else {
+        for (const m of models) {
+          if (!disabledModelIds.includes(m.id)) {
+            currentlySelected.add(m.id);
+          }
         }
-      }
-      for (const fullModel of Object.values(modelAliases)) {
-        if (fullModel.startsWith(`${providerStorageAlias}/`)) {
-          currentlySelected.add(fullModel.slice(providerStorageAlias.length + 1));
-        } else if (fullModel.startsWith(`${providerId}/`)) {
-          currentlySelected.add(fullModel.slice(providerId.length + 1));
+        for (const m of customModels) {
+          if (m.providerAlias === providerStorageAlias && (m.kind || m.type || "llm") === "llm") {
+            currentlySelected.add(m.id);
+          }
+        }
+        for (const fullModel of Object.values(modelAliases)) {
+          if (fullModel.startsWith(`${providerStorageAlias}/`)) {
+            currentlySelected.add(fullModel.slice(providerStorageAlias.length + 1));
+          } else if (fullModel.startsWith(`${providerId}/`)) {
+            currentlySelected.add(fullModel.slice(providerId.length + 1));
+          }
         }
       }
 
@@ -669,11 +676,17 @@ export default function ProviderDetailPage() {
     }
   };
 
-  const handleSaveImportedModels = async (toAdd, toRemove) => {
+  const handleSaveImportedModels = async (toAdd, toRemove, selectedIds = []) => {
     setSavingImportModels(true);
     try {
       for (const modelId of toAdd) {
-        await handleAddCustomModel(modelId, "llm", providerStorageAlias);
+        if (disabledModelIds.includes(modelId)) {
+          await handleEnableModel(modelId);
+        }
+        const isBuiltIn = models.some((m) => m.id === modelId);
+        if (!isBuiltIn) {
+          await handleAddCustomModel(modelId, "llm", providerStorageAlias);
+        }
       }
       for (const modelId of toRemove) {
         const existing = customModels.find(
@@ -687,9 +700,38 @@ export default function ProviderDetailPage() {
           );
           if (aliasEntry) {
             await handleDeleteAlias(aliasEntry[0]);
+          } else {
+            const isBuiltIn = models.some((m) => m.id === modelId);
+            if (isBuiltIn && !disabledModelIds.includes(modelId)) {
+              await handleDisableModel(modelId);
+            }
           }
         }
       }
+
+      // Persist enabledModels in the connection record
+      const activeConnection = connections.find((conn) => conn.isActive !== false);
+      if (activeConnection && Array.isArray(selectedIds)) {
+        try {
+          const updatedPsd = {
+            ...(activeConnection.providerSpecificData || {}),
+            enabledModels: selectedIds,
+          };
+          const res = await fetch(`/api/providers/${activeConnection.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              providerSpecificData: updatedPsd,
+            }),
+          });
+          if (res.ok) {
+            await fetchConnections();
+          }
+        } catch (connErr) {
+          console.log("Error updating connection enabledModels:", connErr);
+        }
+      }
+
       setShowImportModelsModal(false);
     } catch (error) {
       console.log("Error saving imported models:", error);

@@ -185,6 +185,32 @@ describe("Provider Model List Fixes", () => {
     expect(activeOnly.some((c) => c.name === "NavyAI")).toBe(false);
   });
 
+  it("restricts provider models in buildModelsList when enabledModels is set on connection", async () => {
+    const localDb = await import("@/lib/localDb");
+    vi.spyOn(localDb, "getProviderConnections").mockResolvedValue([
+      {
+        id: "cline-conn-1",
+        provider: "cline",
+        name: "My Cline",
+        isActive: true,
+        providerSpecificData: {
+          enabledModels: ["anthropic/claude-3-7-sonnet", "openai/gpt-4o"],
+        },
+      },
+    ]);
+    vi.spyOn(localDb, "getCombos").mockResolvedValue([]);
+    vi.spyOn(localDb, "getCustomModels").mockResolvedValue([]);
+    vi.spyOn(localDb, "getModelAliases").mockResolvedValue({});
+
+    const models = await buildModelsList(["llm"]);
+    const clineModels = models.filter((m) => m.owned_by === "cl" || m.id.startsWith("cl/"));
+    expect(clineModels.length).toBe(2);
+    expect(clineModels.map((m) => m.id)).toEqual([
+      "cl/anthropic/claude-3-7-sonnet",
+      "cl/openai/gpt-4o",
+    ]);
+  });
+
   describe("OAuth Provider Models Endpoint", () => {
     it("returns static models for Claude OAuth connection without apiKey", async () => {
       const { GET } = await import("@/app/api/providers/[id]/models/route.js");

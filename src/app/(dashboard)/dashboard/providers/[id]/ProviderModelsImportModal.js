@@ -75,7 +75,7 @@ export default function ProviderModelsImportModal({
 
   const handleSave = async () => {
     if (saving || !hasImportChanges) return;
-    await onSave(toAdd, toRemove);
+    await onSave(toAdd, toRemove, Array.from(selectedImportIds));
   };
 
   return (
