@@ -22,7 +22,7 @@ const NO_AUTH_PROVIDER_IDS = Object.keys(FREE_PROVIDERS).filter(id => FREE_PROVI
 
 // Providers with per-account live catalogs via /api/providers/[id]/models.
 // Static registry stays as fallback when live fetch fails or is empty.
-const LIVE_CATALOG_PROVIDERS = ["cursor", "cline", "clinepass"];
+const LIVE_CATALOG_PROVIDERS = ["cursor"];
 
 // Fetch a provider's account-scoped catalog for every active connection and merge
 // the results. Entries collapse by model id on purpose: two connections of the
@@ -112,12 +112,7 @@ export default function ModelSelectModal({
     return map;
   }, [filteredActiveProviders]);
   const cursorConnectionIds = liveConnectionIdsByProvider.cursor;
-  const clineConnectionIds = liveConnectionIdsByProvider.cline;
-  const clinepassConnectionIds = liveConnectionIdsByProvider.clinepass;
-
   const cursorModels = useLiveProviderModels(isOpen, cursorConnectionIds, "Cursor");
-  const clineModels = useLiveProviderModels(isOpen, clineConnectionIds, "Cline");
-  const clinepassModels = useLiveProviderModels(isOpen, clinepassConnectionIds, "ClinePass");
 
   const fetchCombos = async () => {
     try {
@@ -350,7 +345,7 @@ export default function ModelSelectModal({
           hasModels: mergedModels.length > 0,
         };
       } else {
-        const liveModels = providerId === "cursor" ? cursorModels : providerId === "cline" ? clineModels : providerId === "clinepass" ? clinepassModels : [];
+        const liveModels = providerId === "cursor" ? cursorModels : [];
         const hardcodedModels = liveModels.length > 0
           ? liveModels
           : getModelsByProviderId(providerId);
@@ -421,8 +416,30 @@ export default function ModelSelectModal({
       if (group.models.length === 0) delete groups[providerId];
     });
 
+    // Filter by enabledModels if explicitly configured on any active connection for this provider
+    Object.entries(groups).forEach(([providerId, group]) => {
+      const providerConns = filteredActiveProviders.filter((p) => p.provider === providerId);
+      const explicitEnabled = [];
+      for (const conn of providerConns) {
+        if (Array.isArray(conn.providerSpecificData?.enabledModels) && conn.providerSpecificData.enabledModels.length > 0) {
+          explicitEnabled.push(...conn.providerSpecificData.enabledModels);
+        }
+      }
+      if (explicitEnabled.length > 0) {
+        const enabledSet = new Set(explicitEnabled);
+        const alias = group.alias || getProviderAlias(providerId) || providerId;
+        group.models = group.models.filter((m) =>
+          enabledSet.has(m.id) ||
+          enabledSet.has(m.value) ||
+          enabledSet.has(`${alias}/${m.id}`) ||
+          (m.value && enabledSet.has(m.value.replace(`${alias}/`, "")))
+        );
+        if (group.models.length === 0) delete groups[providerId];
+      }
+    });
+
     return groups;
-  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders, cursorModels, clineModels, clinepassModels]);
+  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders, cursorModels]);
 
   // Filter combos by search query (and hide combos when kindFilter is set — combos are LLM-only by design)
   const filteredCombos = useMemo(() => {
@@ -430,7 +447,7 @@ export default function ModelSelectModal({
     if (!searchQuery.trim()) return combos;
     const query = searchQuery.toLowerCase();
     return combos.filter(c => c.name.toLowerCase().includes(query));
-  }, [combos, searchQuery, kindFilter]);
+  }, [combos, searchQuery, kindFilter, capFilter]);
 
   // Sort models alphabetically, with added models floated to top
   const sortModels = (models) => {
