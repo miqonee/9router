@@ -6,9 +6,9 @@ import { getMeta, setMeta } from "../helpers/metaStore.js";
 function maskApiKey(key) {
   if (!key || typeof key !== "string") return null;
   const trimmed = key.trim();
-  if (trimmed.length <= 8) return trimmed.charAt(0) + "***";
-  if (trimmed.length <= 14) return trimmed.slice(0, 4) + "..." + trimmed.slice(-3);
-  return trimmed.slice(0, 8) + "..." + trimmed.slice(-6);
+  if (trimmed.length <= 12) return trimmed.charAt(0) + "***";
+  // Keep the tail: keys sharing a machine-id prefix (team keys) must not collide.
+  return trimmed.slice(0, 8) + "***" + trimmed.slice(-4);
 }
 
 const PENDING_TIMEOUT_MS = 60 * 1000;
@@ -650,7 +650,9 @@ export async function getUsageStats(period = "all") {
         const keyInfo = apiKeyMap[apiKeyVal];
         const apiKeyMasked = maskApiKey(r.apiKey);
         const keyName = keyInfo?.name || (apiKeyMasked || r.apiKey.slice(0, 8) + "...");
-        const akKey = `${apiKeyMasked}|${r.model}|${r.provider || "unknown"}`;
+        // Key by the FULL api key (same as the daily rollup + lastUsed overlay)
+        // — masking here collided all keys sharing a prefix into one bucket.
+        const akKey = `${r.apiKey}|${r.model}|${r.provider || "unknown"}`;
         if (!stats.byApiKey[akKey]) {
           stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, apiKeyMasked, keyName, apiKeyKey: apiKeyMasked, lastUsed: r.timestamp };
         }
